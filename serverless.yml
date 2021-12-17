@@ -1,0 +1,134 @@
+service: aws-node-sqs-worker
+
+frameworkVersion: '2'
+
+provider:
+  name: aws
+  runtime: nodejs12.x
+  lambdaHashingVersion: '20201221'
+  stage: dev
+  region: us-east-1
+  environment:
+    accountId: !Sub '${AWS::AccountId}'
+    region: !Sub '${AWS::Region}'
+    stage: ${self:provider.stage}
+    service: ${self:service}
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - sqs:SendMessage
+            - "sns:*"
+          Resource: "*"
+
+functions:
+  producer:
+    handler: handler.producer
+    events:
+      - http:
+          method: post
+          path: produce
+    environment:
+      QUEUE_URL:
+        Ref: WorkerQueue
+  consumer:
+    handler: handler.consumer
+    events:
+      - sqs:
+          batchSize: 1
+          arn:
+            Fn::GetAtt:
+              - WorkerQueue
+              - Arn
+
+  fanoutConsumer:
+    handler: handler.fanoutConsumer
+    events:
+      - sqs:
+          batchSize: 1
+          arn:
+            Fn::GetAtt:
+              - FanoutQueue
+              - Arn
+
+  fanoutConsumer2:
+    handler: handler.fanoutConsumer2
+    events:
+      - sqs:
+          batchSize: 1
+          arn:
+            Fn::GetAtt:
+              - FanoutQueue2
+              - Arn
+
+resources:
+  Resources:
+    fanoutSns:
+      Type: AWS::SNS::Topic
+      Properties:
+        TopicName: ${self:service}-${self:provider.stage}-fanout-sns-topic
+
+    WorkerQueue:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: workerQueue-${self:provider.stage}
+        RedrivePolicy:
+          deadLetterTargetArn:
+            Fn::GetAtt:
+              - WorkerDLQ
+              - Arn
+          maxReceiveCount: 5
+    WorkerDLQ:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: workerDlq-${self:provider.stage}
+
+    FanoutQueue:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: fanoutQueue-${self:provider.stage}
+        RedrivePolicy:
+          deadLetterTargetArn:
+            Fn::GetAtt:
+              - FanoutDLQ
+              - Arn
+          maxReceiveCount: 5
+    FanoutDLQ:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: fanoutDlq-${self:provider.stage}
+
+    FanoutQueue2:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: fanoutQueue2-${self:provider.stage}
+        RedrivePolicy:
+          deadLetterTargetArn:
+            Fn::GetAtt:
+              - FanoutDLQ2
+              - Arn
+          maxReceiveCount: 5
+    FanoutDLQ2:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: fanoutDlq2-${self:provider.stage}
+
+    firstQueueSubscription:
+      Type: 'AWS::SNS::Subscription'
+      Properties:
+        TopicArn: !Ref fanoutSns
+        Endpoint: !GetAtt
+          - FanoutQueue
+          - Arn
+        Protocol: sqs
+        RawMessageDelivery: 'true'
+    QueueSubscription2:
+      Type: 'AWS::SNS::Subscription'
+      Properties:
+        TopicArn: !Ref fanoutSns
+        Endpoint: !GetAtt
+          - FanoutQueue2
+          - Arn
+        Protocol: sqs
+        RawMessageDelivery: 'true'
